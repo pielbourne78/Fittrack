@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Gym Program - {{ user.fullname }}</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f4f4; padding: 20px; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; }
+        .day-card { border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .day-card.completed { background: #e8f5e9; border-color: #2e7d32; opacity: 0.7; }
+        .workout-info { flex-grow: 1; }
+        .done-checkbox { transform: scale(1.5); cursor: pointer; }
+        .back-link { color: #f55207; text-decoration: none; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/dashboard/{{ user.id }}" class="back-link">← Back to Dashboard</a>
+        <h1>{{ user.target_days }}-Day Gym Program</h1>
+        <p>Check the box when you complete your workout!</p>
+
+        <form method="POST">
+            {% for item in schedule %}
+                <div class="day-card {{ 'completed' if item.is_done else '' }}">
+                    <div class="workout-info">
+                        <strong>Day {{ item.day_num }}: {{ item.name }}</strong><br>
+                        <small style="color: #666;">{{ item.alt }}</small>
+                        
+                        <details style="margin-top: 10px; cursor: pointer;">
+                            <summary style="color: #f55207; font-size: 0.85rem; font-weight: bold;">
+                                View Exercises & Calories ↓
+                            </summary>
+                            <div style="background: #fafafa; padding: 10px; border-radius: 5px; margin-top: 5px; font-size: 0.9rem;">
+                                <ul style="list-style: none; padding-left: 0; margin: 0;">
+                                    {% for ex in item.exercises %}
+                                    <li style="display: flex; justify-content: space-between; border-bottom: 1px solid #eee; padding: 4px 0;">
+                                        <span>{{ ex.name }}</span>
+                                        <span style="color: #888;">{{ ex.cal }} kcal</span>
+                                    </li>
+                                    {% endfor %}
+                                </ul>
+                            </div>
+                        </details>
+                    </div>
+                    
+                    <div>
+                        <input type="checkbox" name="completed_days" value="{{ item.day_num }}" 
+                            class="done-checkbox" {{ 'checked' if item.is_done else '' }}>
+                    </div>
+                </div>
+            {% endfor %}
+            <button type="submit" style="position: fixed; bottom: 20px; right: 20px; padding: 15px 30px; background: #28a745; color: white; border: none; border-radius: 50px; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.2);">
+                Save Progress
+            </button>
+        </form>
+    </div>
+</body>
+</html>

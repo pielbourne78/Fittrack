@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Progress Report - {{ user.fullname }}</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f4f4f4; }
+        .report-container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: left; }
+        th { background-color: #f55207; color: white; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        .back-btn { display: inline-block; margin-bottom: 20px; text-decoration: none; color: #f55207; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="report-container">
+        <a href="/dashboard/{{ user.id }}" class="back-btn">← Back to Dashboard</a>
+        <h1>Activity Report for {{ user.fullname }}</h1>
+        <p>Total Days Tracked: <strong>{{ total_entries }}</strong></p>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Workout</th>
+                    <th>Consumed</th>
+                    <th>Burned</th>
+                    <th>Net Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.date_logged.strftime('%Y-%m-%d') }}</td>
+                    <td>{{ log.workout_type }}</td>
+                    <td style="color: rgb(255, 3, 3);">+{{ log.calories_consumed }}</td>
+                    <td style="color: rgb(14, 216, 7);">-{{ log.calories_burned }}</td>
+                    <td>
+                        <strong>{{ log.calories_consumed - log.calories_burned }} kcal</strong>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
