@@ -10,6 +10,7 @@ class User {
     required this.fullname,
     required this.age,
     required this.gender,
+    this.activity_level = 'Lightly active',
     this.height,
     this.weight,
     this.target_weight,
@@ -20,11 +21,12 @@ class User {
   });
 
   final int id;
-  final String email;
-  final String password;
-  final String fullname;
+  String email;
+  String password;
+  String fullname;
   int age;
-  final String gender;
+  String gender;
+  String activity_level;
   double? height;
   double? weight;
   double? target_weight;
@@ -37,58 +39,115 @@ class User {
     if (weight == null || height == null || weight! <= 0 || height! <= 0) {
       return <String, Object?>{};
     }
+    if (age < 18) return <String, Object?>{};
 
-    final double bmr = gender == 'Male'
-        ? (10 * weight!) + (6.25 * height!) - (5 * age) + 5
-        : (10 * weight!) + (6.25 * height!) - (5 * age) - 161;
+    final double base_rmr = (10 * weight!) + (6.25 * height!) - (5 * age);
+    final double estimated_rmr = switch (gender) {
+      'Male' => base_rmr + 5,
+      'Female' => base_rmr - 161,
+      _ => base_rmr - 78,
+    };
+    const Map<String, double> activityFactors = <String, double>{
+      'Sedentary': 1.4,
+      'Lightly active': 1.6,
+      'Moderately active': 1.8,
+      'Very active': 2.0,
+    };
+    final double maintenance_calories =
+        estimated_rmr * (activityFactors[activity_level] ?? 1.6);
     final double weight_diff = weight! - (target_weight ?? weight!);
+    final int plan_days = max(1, target_days ?? 90);
     late final double daily_calories;
     late final String goal_type;
+    var timeline_warning = false;
+    var recommended_days = plan_days;
 
     if (weight_diff > 0) {
-      daily_calories = max(1200, bmr - 500).toDouble();
       goal_type = 'Weight Loss';
+      final double requested_kg_per_week = weight_diff * 7 / plan_days;
+      const double gradualKgPerWeek = 0.5;
+      timeline_warning = requested_kg_per_week > gradualKgPerWeek;
+      recommended_days = max(
+        plan_days,
+        (weight_diff / gradualKgPerWeek * 7).ceil(),
+      );
+      final double timeline_deficit = weight_diff * 7700 / plan_days;
+      final double deficit = min(
+        500,
+        min(maintenance_calories * 0.2, timeline_deficit),
+      );
+      daily_calories = maintenance_calories - deficit;
     } else if (weight_diff < 0) {
-      daily_calories = max(1200, bmr + 500).toDouble();
       goal_type = 'Bulking';
+      final double timeline_surplus = weight_diff.abs() * 7700 / plan_days;
+      final double surplus = min(
+        250,
+        min(maintenance_calories * 0.1, timeline_surplus),
+      );
+      daily_calories = maintenance_calories + surplus;
     } else {
-      daily_calories = max(1200, bmr).toDouble();
       goal_type = 'Maintenance';
+      daily_calories = maintenance_calories;
     }
 
-    final double protein_g = weight! * 2.0;
-    final double fats_g = (daily_calories * 0.25) / 9;
-    final double carbs_g = max(
-      0,
-      (daily_calories - (protein_g * 4) - (fats_g * 9)) / 4,
-    ).toDouble();
+    // A balanced split keeps every displayed macro positive and consistent
+    // with the estimated calorie target.
+    final int protein_g = (daily_calories * 0.20 / 4).round();
+    final int fats_g = (daily_calories * 0.30 / 9).round();
+    final int carbs_g = (daily_calories * 0.50 / 4).round();
 
     return <String, Object?>{
       'calories': daily_calories.round(),
-      'protein': protein_g.round(),
-      'fats': fats_g.round(),
-      'carbs': carbs_g.round(),
+      'maintenance_calories': maintenance_calories.round(),
+      'protein': protein_g,
+      'fats': fats_g,
+      'carbs': carbs_g,
       'goal': goal_type,
+      'activity_level': activity_level,
+      'timeline_warning': timeline_warning,
+      'recommended_days': recommended_days,
     };
   }
 
   String get_suggestion() {
     final Map<String, Object?> diet = get_diet_plan();
-    if (diet.isEmpty || target_weight == null || weight == null) {
+    if (age < 18) {
+      return 'Personalized calorie estimates are intended for adults. For teens, '
+          'ask a qualified health professional for guidance that accounts for growth.';
+    }
+    if (weight == null || height == null || weight! <= 0 || height! <= 0) {
       return 'Add your current and target weight to see a personalized estimate.';
+    }
+    if (diet.isEmpty) return 'Update your profile to see a calorie estimate.';
+    if (target_weight == null) {
+      return 'Your estimated maintenance target is ${diet['calories']} kcal/day. '
+          'Set a target weight to get a goal-specific estimate.';
     }
 
     final double weight_diff = (weight! - target_weight!).abs();
+    final String calories = '${diet['calories']}';
+    final String sex_note = gender == 'Other'
+        ? ' The equation uses a midpoint because its standard versions use male and female inputs.'
+        : '';
+    final String macros =
+        'A starting macro split is ${diet['protein']} g protein, '
+        '${diet['carbs']} g carbohydrates, and ${diet['fats']} g fat.';
+    if (weight_diff == 0) {
+      return 'Your current and target weights match. Estimated maintenance is '
+          '$calories kcal/day. $macros$sex_note Review your trend over a few weeks and adjust if needed.';
+    }
     if (weight! > target_weight!) {
-      return 'To lose ${weight_diff.toStringAsFixed(1)} kg, aim for '
-          '${diet['calories']} kcal and include protein-rich foods in balanced meals.';
+      final String timeline = diet['timeline_warning'] == true
+          ? ' Your requested timeline is faster than this estimate’s conservative pace; consider allowing at least '
+                '${diet['recommended_days']} days.'
+          : '';
+      return 'For gradual weight loss, start near $calories kcal/day '
+          '(estimated maintenance: ${diet['maintenance_calories']} kcal/day). '
+          '$macros$sex_note$timeline These are estimates; adjust based on your trend and how you feel.';
     }
-    if (weight! < target_weight!) {
-      return 'To gain ${weight_diff.toStringAsFixed(1)} kg, aim for '
-          '${diet['calories']} kcal and fuel your workouts with balanced meals.';
-    }
-    return 'You are at your target weight. Keep up a balanced routine and '
-        'adjust your plan as your needs change.';
+    return 'For gradual weight gain, start near $calories kcal/day '
+        '(estimated maintenance: ${diet['maintenance_calories']} kcal/day). '
+        '$macros$sex_note Review your weight trend after a few weeks and adjust gradually.';
   }
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -98,6 +157,7 @@ class User {
     'fullname': fullname,
     'age': age,
     'gender': gender,
+    'activity_level': activity_level,
     'height': height,
     'weight': weight,
     'target_weight': target_weight,
@@ -114,6 +174,7 @@ class User {
     fullname: json['fullname'] as String,
     age: json['age'] as int,
     gender: json['gender'] as String,
+    activity_level: json['activity_level'] as String? ?? 'Lightly active',
     height: (json['height'] as num?)?.toDouble(),
     weight: (json['weight'] as num?)?.toDouble(),
     target_weight: (json['target_weight'] as num?)?.toDouble(),

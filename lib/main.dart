@@ -1,5 +1,6 @@
 // ignore_for_file: non_constant_identifier_names
 
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
@@ -41,16 +42,17 @@ class _FitTrackAppState extends State<FitTrackApp> {
   }
 
   Future<void> _initialize() async {
+    final Stopwatch startupTimer = Stopwatch()..start();
     try {
       await _store.initialize();
       _user = _store.current_user;
     } catch (error) {
       _startupError = error;
-    } finally {
-      if (mounted) {
-        setState(() => _initialized = true);
-      }
     }
+    const Duration introDuration = Duration(milliseconds: 1250);
+    final Duration remaining = introDuration - startupTimer.elapsed;
+    if (remaining > Duration.zero) await Future<void>.delayed(remaining);
+    if (mounted) setState(() => _initialized = true);
   }
 
   void _authenticated(User user) => setState(() => _user = user);
@@ -169,12 +171,137 @@ class _FitTrackAppState extends State<FitTrackApp> {
   }
 }
 
-class _LoadingScreen extends StatelessWidget {
+class _LoadingScreen extends StatefulWidget {
   const _LoadingScreen();
 
   @override
-  Widget build(BuildContext context) => const Scaffold(
-    body: Center(child: CircularProgressIndicator(color: _accent)),
+  State<_LoadingScreen> createState() => _LoadingScreenState();
+}
+
+class _LoadingScreenState extends State<_LoadingScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1050),
+  )..forward();
+
+  late final Animation<double> _logoScale = Tween<double>(
+    begin: 0.55,
+    end: 1,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutBack));
+
+  late final Animation<double> _logoRotation = Tween<double>(
+    begin: -0.12,
+    end: 0,
+  ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
+
+  late final Animation<double> _textFade = CurvedAnimation(
+    parent: _controller,
+    curve: const Interval(0.35, 0.85, curve: Curves.easeOut),
+  );
+
+  late final Animation<Offset> _textSlide =
+      Tween<Offset>(begin: const Offset(0, 0.18), end: Offset.zero).animate(
+        CurvedAnimation(
+          parent: _controller,
+          curve: const Interval(0.35, 0.9, curve: Curves.easeOutCubic),
+        ),
+      );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: <Color>[Color(0xFFFFF1E8), Color(0xFFF6F7F9)],
+        ),
+      ),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            AnimatedBuilder(
+              animation: _controller,
+              child: Container(
+                width: 88,
+                height: 88,
+                decoration: BoxDecoration(
+                  color: _accent,
+                  borderRadius: BorderRadius.circular(26),
+                  boxShadow: <BoxShadow>[
+                    BoxShadow(
+                      color: _accent.withValues(alpha: 0.24),
+                      blurRadius: 28,
+                      offset: const Offset(0, 12),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.fitness_center_rounded,
+                  color: Colors.white,
+                  size: 42,
+                ),
+              ),
+              builder: (BuildContext context, Widget? child) =>
+                  Transform.rotate(
+                    angle: _logoRotation.value,
+                    child: Transform.scale(
+                      scale: _logoScale.value,
+                      child: child,
+                    ),
+                  ),
+            ),
+            const SizedBox(height: 22),
+            FadeTransition(
+              opacity: _textFade,
+              child: SlideTransition(
+                position: _textSlide,
+                child: const Column(
+                  children: <Widget>[
+                    Text(
+                      'FitTrack',
+                      style: TextStyle(
+                        color: _ink,
+                        fontSize: 30,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.8,
+                      ),
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      'YOUR FITNESS, IN FOCUS',
+                      style: TextStyle(
+                        color: _muted,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2.2,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 34),
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: _accent.withValues(alpha: 0.8),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
   );
 }
 
@@ -229,6 +356,8 @@ class AuthScreen extends StatefulWidget {
 
 class _AuthScreenState extends State<AuthScreen> {
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
   String _fullname = '';
   String _email = '';
   String _password = '';
@@ -238,6 +367,14 @@ class _AuthScreenState extends State<AuthScreen> {
   bool _obscurePassword = true;
   String _gender = 'Male';
   String? _error;
+  String? _success;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
@@ -245,20 +382,34 @@ class _AuthScreenState extends State<AuthScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _success = null;
     });
     try {
-      final User user;
       if (_registering) {
-        user = await widget.store.register(
+        await widget.store.register(
           email: _email,
           password: _password,
           fullname: _fullname,
           age: int.parse(_age),
           gender: _gender,
         );
-      } else {
-        user = await widget.store.login(email: _email, password: _password);
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        if (!mounted) return;
+        _emailController.text = _email;
+        _passwordController.clear();
+        setState(() {
+          _registering = false;
+          _busy = false;
+          _success = 'Account created. Sign in with your new account.';
+        });
+        return;
       }
+      final User user = await widget.store.login(
+        email: _email,
+        password: _password,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (!mounted) return;
       widget.onAuthenticated(user);
     } catch (error) {
       if (mounted) {
@@ -274,6 +425,7 @@ class _AuthScreenState extends State<AuthScreen> {
     setState(() {
       _registering = !_registering;
       _error = null;
+      _success = null;
     });
   }
 
@@ -313,189 +465,239 @@ class _AuthScreenState extends State<AuthScreen> {
     );
   }
 
-  Widget _authCard() => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(28),
-      child: Form(
-        key: _formKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: <Widget>[
-            if (!MediaQuery.sizeOf(context).width.isNaN &&
-                MediaQuery.sizeOf(context).width < 780)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 24),
-                child: _Brand(),
-              ),
-            Text(
-              _registering ? 'Create your account' : 'Welcome back',
-              style: const TextStyle(
-                fontSize: 25,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.6,
-              ),
-            ),
-            const SizedBox(height: 7),
-            Text(
-              _registering
-                  ? 'Build a routine that works for you.'
-                  : 'Sign in to continue your progress.',
-              style: const TextStyle(color: _muted, fontSize: 14),
-            ),
-            const SizedBox(height: 24),
-            if (_registering) ...<Widget>[
-              TextFormField(
-                textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(
-                  labelText: 'Full name',
-                  prefixIcon: Icon(Icons.person_outline),
-                ),
-                onSaved: (String? value) => _fullname = value?.trim() ?? '',
-                validator: (String? value) =>
-                    value == null || value.trim().isEmpty
-                    ? 'Enter your name'
-                    : null,
-              ),
-              const SizedBox(height: 14),
-            ],
-            TextFormField(
-              keyboardType: TextInputType.emailAddress,
-              autofillHints: const <String>[AutofillHints.email],
-              decoration: const InputDecoration(
-                labelText: 'Email address',
-                prefixIcon: Icon(Icons.mail_outline),
-              ),
-              onSaved: (String? value) => _email = value?.trim() ?? '',
-              validator: (String? value) {
-                final String email = value?.trim() ?? '';
-                return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)
-                    ? null
-                    : 'Enter a valid email address';
-              },
-            ),
-            const SizedBox(height: 14),
-            TextFormField(
-              obscureText: _obscurePassword,
-              autofillHints: _registering
-                  ? const <String>[AutofillHints.newPassword]
-                  : const <String>[AutofillHints.password],
-              onSaved: (String? value) => _password = value ?? '',
-              decoration: InputDecoration(
-                labelText: 'Password',
-                prefixIcon: const Icon(Icons.lock_outline),
-                suffixIcon: IconButton(
-                  onPressed: () =>
-                      setState(() => _obscurePassword = !_obscurePassword),
-                  icon: Icon(
-                    _obscurePassword
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
+  Widget _authCard() => TweenAnimationBuilder<double>(
+    tween: Tween<double>(begin: 0, end: 1),
+    duration: const Duration(milliseconds: 500),
+    curve: Curves.easeOutCubic,
+    builder: (BuildContext context, double value, Widget? child) => Opacity(
+      opacity: value,
+      child: Transform.translate(
+        offset: Offset(0, 14 * (1 - value)),
+        child: child,
+      ),
+    ),
+    child: Card(
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeInOutCubic,
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                if (!MediaQuery.sizeOf(context).width.isNaN &&
+                    MediaQuery.sizeOf(context).width < 780)
+                  const Padding(
+                    padding: EdgeInsets.only(bottom: 24),
+                    child: _Brand(),
+                  ),
+                Text(
+                  _registering ? 'Create your account' : 'Welcome back',
+                  style: const TextStyle(
+                    fontSize: 25,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.6,
                   ),
                 ),
-              ),
-              validator: (String? value) {
-                if (value == null || value.isEmpty) {
-                  return 'Enter your password';
-                }
-                if (_registering && value.length < 8) {
-                  return 'Use at least 8 characters';
-                }
-                return null;
-              },
-            ),
-            if (_registering) ...<Widget>[
-              const SizedBox(height: 14),
-              LayoutBuilder(
-                builder: (BuildContext context, BoxConstraints constraints) {
-                  final Widget ageField = TextFormField(
-                    keyboardType: TextInputType.number,
+                const SizedBox(height: 7),
+                Text(
+                  _registering
+                      ? 'Build a routine that works for you.'
+                      : 'Sign in to continue your progress.',
+                  style: const TextStyle(color: _muted, fontSize: 14),
+                ),
+                const SizedBox(height: 24),
+                if (_registering) ...<Widget>[
+                  TextFormField(
+                    textCapitalization: TextCapitalization.words,
                     decoration: const InputDecoration(
-                      labelText: 'Age',
-                      suffixText: 'years',
+                      labelText: 'Full name',
+                      prefixIcon: Icon(Icons.person_outline),
                     ),
-                    onSaved: (String? value) => _age = value?.trim() ?? '',
-                    validator: (String? value) {
-                      final int? age = int.tryParse(value ?? '');
-                      return age != null && age >= 13 && age <= 120
-                          ? null
-                          : 'Use an age from 13 to 120';
-                    },
-                  );
-                  final Widget genderField = DropdownButtonFormField<String>(
-                    initialValue: _gender,
-                    decoration: const InputDecoration(labelText: 'Sex'),
-                    items: const <DropdownMenuItem<String>>[
-                      DropdownMenuItem(value: 'Male', child: Text('Male')),
-                      DropdownMenuItem(value: 'Female', child: Text('Female')),
-                      DropdownMenuItem(value: 'Other', child: Text('Other')),
-                    ],
-                    onChanged: (String? value) {
-                      if (value != null) setState(() => _gender = value);
-                    },
-                  );
-                  if (constraints.maxWidth < 360) {
-                    return Column(
-                      children: <Widget>[
-                        ageField,
-                        const SizedBox(height: 12),
-                        genderField,
-                      ],
-                    );
-                  }
-                  return Row(
-                    children: <Widget>[
-                      Expanded(child: ageField),
-                      const SizedBox(width: 12),
-                      Expanded(child: genderField),
-                    ],
-                  );
-                },
-              ),
-            ],
-            if (_error != null) ...<Widget>[
-              const SizedBox(height: 14),
-              _InlineError(_error!),
-            ],
-            const SizedBox(height: 20),
-            FilledButton(
-              onPressed: _busy ? null : _submit,
-              child: _busy
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : Text(_registering ? 'Create account' : 'Sign in'),
-            ),
-            const SizedBox(height: 16),
-            Center(
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: <Widget>[
-                  Text(
-                    _registering
-                        ? 'Already have an account? '
-                        : 'New to FitTrack? ',
-                    style: const TextStyle(color: _muted),
+                    onSaved: (String? value) => _fullname = value?.trim() ?? '',
+                    validator: (String? value) =>
+                        value == null || value.trim().isEmpty
+                        ? 'Enter your name'
+                        : null,
                   ),
-                  TextButton(
-                    onPressed: _busy ? null : _toggleMode,
-                    child: Text(_registering ? 'Sign in' : 'Create account'),
+                  const SizedBox(height: 14),
+                ],
+                TextFormField(
+                  controller: _emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  autofillHints: const <String>[AutofillHints.email],
+                  decoration: const InputDecoration(
+                    labelText: 'Email address',
+                    prefixIcon: Icon(Icons.mail_outline),
+                  ),
+                  onSaved: (String? value) => _email = value?.trim() ?? '',
+                  validator: (String? value) {
+                    final String email = value?.trim() ?? '';
+                    return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)
+                        ? null
+                        : 'Enter a valid email address';
+                  },
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _passwordController,
+                  obscureText: _obscurePassword,
+                  autofillHints: _registering
+                      ? const <String>[AutofillHints.newPassword]
+                      : const <String>[AutofillHints.password],
+                  onSaved: (String? value) => _password = value ?? '',
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    prefixIcon: const Icon(Icons.lock_outline),
+                    suffixIcon: IconButton(
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                    ),
+                  ),
+                  validator: (String? value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Enter your password';
+                    }
+                    if (_registering && value.length < 8) {
+                      return 'Use at least 8 characters';
+                    }
+                    return null;
+                  },
+                ),
+                if (_registering) ...<Widget>[
+                  const SizedBox(height: 14),
+                  LayoutBuilder(
+                    builder:
+                        (BuildContext context, BoxConstraints constraints) {
+                          final Widget ageField = TextFormField(
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Age',
+                              suffixText: 'years',
+                            ),
+                            onSaved: (String? value) =>
+                                _age = value?.trim() ?? '',
+                            validator: (String? value) {
+                              final int? age = int.tryParse(value ?? '');
+                              return age != null && age >= 13 && age <= 120
+                                  ? null
+                                  : 'Use an age from 13 to 120';
+                            },
+                          );
+                          final Widget genderField =
+                              DropdownButtonFormField<String>(
+                                initialValue: _gender,
+                                decoration: const InputDecoration(
+                                  labelText: 'Sex',
+                                ),
+                                items: const <DropdownMenuItem<String>>[
+                                  DropdownMenuItem(
+                                    value: 'Male',
+                                    child: Text('Male'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'Female',
+                                    child: Text('Female'),
+                                  ),
+                                  DropdownMenuItem(
+                                    value: 'Other',
+                                    child: Text('Other'),
+                                  ),
+                                ],
+                                onChanged: (String? value) {
+                                  if (value != null) {
+                                    setState(() => _gender = value);
+                                  }
+                                },
+                              );
+                          if (constraints.maxWidth < 360) {
+                            return Column(
+                              children: <Widget>[
+                                ageField,
+                                const SizedBox(height: 12),
+                                genderField,
+                              ],
+                            );
+                          }
+                          return Row(
+                            children: <Widget>[
+                              Expanded(child: ageField),
+                              const SizedBox(width: 12),
+                              Expanded(child: genderField),
+                            ],
+                          );
+                        },
                   ),
                 ],
-              ),
+                if (_success != null) ...<Widget>[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEAF5F0),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      _success!,
+                      style: const TextStyle(color: Color(0xFF246B45)),
+                    ),
+                  ),
+                ],
+                if (_error != null) ...<Widget>[
+                  const SizedBox(height: 14),
+                  _InlineError(_error!),
+                ],
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: _busy ? null : _submit,
+                  child: _busy
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Text(_registering ? 'Create account' : 'Sign in'),
+                ),
+                const SizedBox(height: 16),
+                Center(
+                  child: Wrap(
+                    alignment: WrapAlignment.center,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: <Widget>[
+                      Text(
+                        _registering
+                            ? 'Already have an account? '
+                            : 'New to FitTrack? ',
+                        style: const TextStyle(color: _muted),
+                      ),
+                      TextButton(
+                        onPressed: _busy ? null : _toggleMode,
+                        child: Text(
+                          _registering ? 'Sign in' : 'Create account',
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Your data stays on this device.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12, color: _muted),
+                ),
+              ],
             ),
-            const SizedBox(height: 4),
-            const Text(
-              'Your data stays on this device.',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: _muted),
-            ),
-          ],
+          ),
         ),
       ),
     ),
@@ -634,6 +836,66 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  Future<void> _editAccountInfo() async {
+    final _AccountInfoValues? values = await showDialog<_AccountInfoValues>(
+      context: context,
+      builder: (BuildContext dialogContext) => _AccountInfoDialog(
+        user: widget.user,
+        onDeleteRequested: () {
+          Navigator.of(dialogContext).pop();
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _deleteAccount();
+          });
+        },
+      ),
+    );
+    if (values == null || !mounted) return;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(strokeWidth: 2.5),
+                ),
+                SizedBox(width: 16),
+                Text('Saving account details…'),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    try {
+      await widget.store.update_account_info(
+        user_id: widget.user.id,
+        fullname: values.fullname,
+        email: values.email,
+        age: values.age,
+        gender: values.gender,
+        current_password: values.currentPassword,
+        new_password: values.newPassword,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      _refresh();
+      _showMessage(context, 'Account details updated.');
+    } catch (error) {
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      _showMessage(context, _friendlyError(error), isError: true);
+    }
+  }
+
   Future<void> _deleteAccount() async {
     final bool? confirmed = await showDialog<bool>(
       context: context,
@@ -679,7 +941,11 @@ class _MainShellState extends State<MainShell> {
         store: widget.store,
         onUserChanged: _refresh,
       ),
-      ReportsTab(user: widget.user, store: widget.store),
+      ReportsTab(
+        user: widget.user,
+        store: widget.store,
+        onLogsChanged: _refresh,
+      ),
     ];
     return Scaffold(
       appBar: AppBar(
@@ -705,24 +971,24 @@ class _MainShellState extends State<MainShell> {
             ),
             onSelected: (String value) {
               if (value == 'logout') _logout();
-              if (value == 'delete') _deleteAccount();
+              if (value == 'edit_account') _editAccountInfo();
             },
             itemBuilder: (BuildContext context) =>
                 const <PopupMenuEntry<String>>[
+                  PopupMenuItem<String>(
+                    value: 'edit_account',
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.manage_accounts_outlined),
+                      title: Text('Edit Account Info'),
+                    ),
+                  ),
                   PopupMenuItem<String>(
                     value: 'logout',
                     child: ListTile(
                       contentPadding: EdgeInsets.zero,
                       leading: Icon(Icons.logout),
                       title: Text('Sign out'),
-                    ),
-                  ),
-                  PopupMenuItem<String>(
-                    value: 'delete',
-                    child: ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.delete_outline, color: Colors.red),
-                      title: Text('Delete account'),
                     ),
                   ),
                 ],
@@ -804,6 +1070,7 @@ class _DashboardTabState extends State<DashboardTab> {
           age: saved.age,
           target_weight: saved.target_weight,
           target_days: saved.target_days,
+          activity_level: saved.activity_level,
         );
         widget.onUserChanged();
         if (mounted) _showMessage(context, 'Your goals have been updated.');
@@ -901,18 +1168,21 @@ class _DashboardTabState extends State<DashboardTab> {
                   : '—',
               icon: Icons.monitor_weight_outlined,
               color: const Color(0xFFFFF0E7),
+              animated: true,
             ),
             _SummaryTile(
               label: 'BMI estimate',
               value: _hasStats ? widget.user.bmi!.toStringAsFixed(1) : '—',
               icon: Icons.favorite_outline,
               color: const Color(0xFFEAF5F0),
+              animated: true,
             ),
             _SummaryTile(
               label: 'Today’s intake',
               value: '$todayCalories kcal',
               icon: Icons.local_fire_department_outlined,
               color: const Color(0xFFFFF5DB),
+              animated: true,
             ),
           ],
         ),
@@ -997,6 +1267,7 @@ class _DashboardTabState extends State<DashboardTab> {
             icon: Icons.track_changes,
             title: 'Your profile',
             subtitle: 'A quick look at your basics',
+            animated: true,
           ),
           const SizedBox(height: 20),
           _ProfileLine(label: 'Full name', value: widget.user.fullname),
@@ -1004,6 +1275,8 @@ class _DashboardTabState extends State<DashboardTab> {
           _ProfileLine(label: 'Age', value: '${widget.user.age} years'),
           const Divider(height: 22),
           _ProfileLine(label: 'Sex', value: widget.user.gender),
+          const Divider(height: 22),
+          _ProfileLine(label: 'Activity', value: widget.user.activity_level),
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -1029,6 +1302,32 @@ class _DashboardTabState extends State<DashboardTab> {
   );
 
   Widget _dietCard(Map<String, Object?> diet) {
+    if (widget.user.age < 18) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const _CardHeading(
+                icon: Icons.restaurant_menu,
+                title: 'Your daily guide',
+                subtitle: 'A simple, personalized estimate',
+                animated: true,
+              ),
+              const SizedBox(height: 18),
+              const _EmptyState(
+                icon: Icons.health_and_safety_outlined,
+                title: 'Personalized calorie estimates are for adults',
+                message:
+                    'Nutrition needs change during growth. Ask a qualified '
+                    'health professional for guidance tailored to you.',
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     if (!_hasStats || diet.isEmpty) {
       return Card(
         child: Padding(
@@ -1040,6 +1339,7 @@ class _DashboardTabState extends State<DashboardTab> {
                 icon: Icons.restaurant_menu,
                 title: 'Your daily guide',
                 subtitle: 'A simple, personalized estimate',
+                animated: true,
               ),
               const SizedBox(height: 18),
               const _EmptyState(
@@ -1071,6 +1371,7 @@ class _DashboardTabState extends State<DashboardTab> {
               icon: Icons.restaurant_menu,
               title: 'Your daily guide',
               subtitle: 'An estimate based on your current profile',
+              animated: true,
             ),
             const SizedBox(height: 18),
             Container(
@@ -1189,6 +1490,7 @@ class _DashboardTabState extends State<DashboardTab> {
               icon: Icons.add_task,
               title: 'Log today',
               subtitle: 'Record your intake and activity',
+              animated: true,
             ),
             const SizedBox(height: 18),
             LayoutBuilder(
@@ -1569,10 +1871,69 @@ class _GymProgramTabState extends State<GymProgramTab> {
 }
 
 class ReportsTab extends StatelessWidget {
-  const ReportsTab({required this.user, required this.store, super.key});
+  const ReportsTab({
+    required this.user,
+    required this.store,
+    required this.onLogsChanged,
+    super.key,
+  });
 
   final User user;
   final FitTrackStore store;
+  final VoidCallback onLogsChanged;
+
+  Future<void> _editLog(BuildContext context, DailyLog log) async {
+    final _LogEditValues? values = await showDialog<_LogEditValues>(
+      context: context,
+      builder: (BuildContext context) => _LogEditDialog(log: log),
+    );
+    if (values == null) return;
+    try {
+      await store.update_log(
+        user_id: user.id,
+        log_id: log.id,
+        calories_in: values.calories,
+        workout: values.workout,
+      );
+      onLogsChanged();
+      if (context.mounted) _showMessage(context, 'Activity updated.');
+    } catch (error) {
+      if (context.mounted) {
+        _showMessage(context, _friendlyError(error), isError: true);
+      }
+    }
+  }
+
+  Future<void> _deleteLog(BuildContext context, DailyLog log) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) => AlertDialog(
+        title: const Text('Delete this activity?'),
+        content: const Text('This activity entry will be permanently removed.'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete activity'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await store.delete_log(user_id: user.id, log_id: log.id);
+      onLogsChanged();
+      if (context.mounted) _showMessage(context, 'Activity deleted.');
+    } catch (error) {
+      if (context.mounted) {
+        _showMessage(context, _friendlyError(error), isError: true);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1646,7 +2007,13 @@ class ReportsTab extends StatelessWidget {
                               ?.copyWith(fontWeight: FontWeight.w800),
                         ),
                         const SizedBox(height: 12),
-                        ...logs.map(_ActivityRow.new),
+                        ...logs.map(
+                          (DailyLog log) => _ActivityRow(
+                            log,
+                            onEdit: () => _editLog(context, log),
+                            onDelete: () => _deleteLog(context, log),
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -1666,9 +2033,11 @@ class ReportsTab extends StatelessWidget {
 }
 
 class _ActivityRow extends StatelessWidget {
-  const _ActivityRow(this.log);
+  const _ActivityRow(this.log, {this.onEdit, this.onDelete});
 
   final DailyLog log;
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1722,6 +2091,33 @@ class _ActivityRow extends StatelessWidget {
               ),
             ],
           ),
+          if (onEdit != null && onDelete != null)
+            PopupMenuButton<String>(
+              tooltip: 'Activity options',
+              onSelected: (String action) {
+                if (action == 'edit') onEdit!();
+                if (action == 'delete') onDelete!();
+              },
+              itemBuilder: (BuildContext context) =>
+                  const <PopupMenuEntry<String>>[
+                    PopupMenuItem<String>(
+                      value: 'edit',
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.edit_outlined),
+                        title: Text('Edit activity'),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'delete',
+                      child: ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.delete_outline, color: Colors.red),
+                        title: Text('Delete activity'),
+                      ),
+                    ),
+                  ],
+            ),
         ],
       ),
     );
@@ -1771,11 +2167,13 @@ class _CardHeading extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.subtitle,
+    this.animated = false,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
+  final bool animated;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -1787,7 +2185,9 @@ class _CardHeading extends StatelessWidget {
           color: const Color(0xFFFFF0E7),
           borderRadius: BorderRadius.circular(13),
         ),
-        child: Icon(icon, color: _accent, size: 20),
+        child: animated
+            ? _FloatingIcon(child: Icon(icon, color: _accent, size: 20))
+            : Icon(icon, color: _accent, size: 20),
       ),
       const SizedBox(width: 12),
       Expanded(
@@ -1813,12 +2213,14 @@ class _SummaryTile extends StatelessWidget {
     required this.value,
     required this.icon,
     required this.color,
+    this.animated = false,
   });
 
   final String label;
   final String value;
   final IconData icon;
   final Color color;
+  final bool animated;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -1834,7 +2236,9 @@ class _SummaryTile extends StatelessWidget {
                 color: color,
                 borderRadius: BorderRadius.circular(13),
               ),
-              child: Icon(icon, color: _ink, size: 20),
+              child: animated
+                  ? _FloatingIcon(child: Icon(icon, color: _ink, size: 20))
+                  : Icon(icon, color: _ink, size: 20),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -1864,6 +2268,67 @@ class _SummaryTile extends StatelessWidget {
         ),
       ),
     ),
+  );
+}
+
+class _FloatingIcon extends StatefulWidget {
+  const _FloatingIcon({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_FloatingIcon> createState() => _FloatingIconState();
+}
+
+class _FloatingIconState extends State<_FloatingIcon>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 650),
+  );
+  Timer? _pulseTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addStatusListener(_handleAnimationStatus);
+    _schedulePulse();
+  }
+
+  void _handleAnimationStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed) {
+      _controller.reverse();
+    } else if (status == AnimationStatus.dismissed) {
+      _schedulePulse();
+    }
+  }
+
+  void _schedulePulse() {
+    _pulseTimer?.cancel();
+    _pulseTimer = Timer(const Duration(milliseconds: 750), () {
+      if (mounted) _controller.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pulseTimer?.cancel();
+    _controller.removeStatusListener(_handleAnimationStatus);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _controller,
+    child: widget.child,
+    builder: (BuildContext context, Widget? child) {
+      final double motion = Curves.easeInOutCubic.transform(_controller.value);
+      return Transform.translate(
+        offset: Offset(0, -3 * motion),
+        child: Transform.scale(scale: 1 + (0.035 * motion), child: child),
+      );
+    },
   );
 }
 
@@ -1918,6 +2383,361 @@ class _ProfileLine extends StatelessWidget {
   );
 }
 
+class _LogEditValues {
+  const _LogEditValues({required this.calories, required this.workout});
+
+  final int calories;
+  final String workout;
+}
+
+class _LogEditDialog extends StatefulWidget {
+  const _LogEditDialog({required this.log});
+
+  final DailyLog log;
+
+  @override
+  State<_LogEditDialog> createState() => _LogEditDialogState();
+}
+
+class _LogEditDialogState extends State<_LogEditDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  late final TextEditingController _calories;
+  late String _workout;
+
+  static const List<String> _workouts = <String>[
+    'Push Day',
+    'Pull Day',
+    'Leg Day',
+    'Rest',
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _calories = TextEditingController(
+      text: widget.log.calories_consumed.toString(),
+    );
+    _workout = widget.log.workout_type;
+  }
+
+  @override
+  void dispose() {
+    _calories.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.of(context).pop(
+      _LogEditValues(calories: int.parse(_calories.text), workout: _workout),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Edit activity'),
+    content: SizedBox(
+      width: 400,
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            TextFormField(
+              controller: _calories,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Calories consumed',
+                suffixText: 'kcal',
+              ),
+              validator: (String? value) {
+                final int? calories = int.tryParse(value ?? '');
+                if (calories == null || calories < 0 || calories > 10000) {
+                  return 'Enter a whole number from 0 to 10000';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              initialValue: _workout,
+              decoration: const InputDecoration(labelText: 'Workout'),
+              items: _workouts
+                  .map(
+                    (String workout) => DropdownMenuItem<String>(
+                      value: workout,
+                      child: Text(workout),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (String? value) {
+                if (value != null) setState(() => _workout = value);
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
+    actions: <Widget>[
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(onPressed: _save, child: const Text('Save changes')),
+    ],
+  );
+}
+
+class _AccountInfoValues {
+  const _AccountInfoValues({
+    required this.fullname,
+    required this.email,
+    required this.age,
+    required this.gender,
+    required this.currentPassword,
+    required this.newPassword,
+  });
+
+  final String fullname;
+  final String email;
+  final int age;
+  final String gender;
+  final String? currentPassword;
+  final String? newPassword;
+}
+
+class _AccountInfoDialog extends StatefulWidget {
+  const _AccountInfoDialog({
+    required this.user,
+    required this.onDeleteRequested,
+  });
+
+  final User user;
+  final VoidCallback onDeleteRequested;
+
+  @override
+  State<_AccountInfoDialog> createState() => _AccountInfoDialogState();
+}
+
+class _AccountInfoDialogState extends State<_AccountInfoDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  late final TextEditingController _fullname;
+  late final TextEditingController _email;
+  late final TextEditingController _age;
+  late final TextEditingController _currentPassword;
+  late final TextEditingController _newPassword;
+  late final TextEditingController _confirmPassword;
+  late String _gender;
+  bool _showPasswordFields = false;
+  bool _obscurePasswords = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fullname = TextEditingController(text: widget.user.fullname);
+    _email = TextEditingController(text: widget.user.email);
+    _age = TextEditingController(text: widget.user.age.toString());
+    _currentPassword = TextEditingController();
+    _newPassword = TextEditingController();
+    _confirmPassword = TextEditingController();
+    _gender = widget.user.gender;
+  }
+
+  @override
+  void dispose() {
+    _fullname.dispose();
+    _email.dispose();
+    _age.dispose();
+    _currentPassword.dispose();
+    _newPassword.dispose();
+    _confirmPassword.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    if (!_formKey.currentState!.validate()) return;
+    Navigator.of(context).pop(
+      _AccountInfoValues(
+        fullname: _fullname.text.trim(),
+        email: _email.text.trim(),
+        age: int.parse(_age.text),
+        gender: _gender,
+        currentPassword: _currentPassword.text.isEmpty
+            ? null
+            : _currentPassword.text,
+        newPassword: _newPassword.text.isEmpty ? null : _newPassword.text,
+      ),
+    );
+  }
+
+  Widget _passwordField({
+    required TextEditingController controller,
+    required String label,
+    required String? Function(String?) validator,
+  }) => TextFormField(
+    controller: controller,
+    obscureText: _obscurePasswords,
+    decoration: InputDecoration(
+      labelText: label,
+      suffixIcon: IconButton(
+        onPressed: () => setState(() => _obscurePasswords = !_obscurePasswords),
+        icon: Icon(
+          _obscurePasswords
+              ? Icons.visibility_outlined
+              : Icons.visibility_off_outlined,
+        ),
+      ),
+    ),
+    onChanged: (String _) => setState(() {}),
+    validator: validator,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final bool changingPassword =
+        _currentPassword.text.isNotEmpty ||
+        _newPassword.text.isNotEmpty ||
+        _confirmPassword.text.isNotEmpty;
+    return AlertDialog(
+      title: const Text('Edit Account Info'),
+      content: SizedBox(
+        width: 440,
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                TextFormField(
+                  controller: _fullname,
+                  textCapitalization: TextCapitalization.words,
+                  decoration: const InputDecoration(labelText: 'Full name'),
+                  validator: (String? value) =>
+                      value == null || value.trim().isEmpty
+                      ? 'Enter your name'
+                      : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _email,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(labelText: 'Email address'),
+                  validator: (String? value) {
+                    final String email = value?.trim() ?? '';
+                    return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)
+                        ? null
+                        : 'Enter a valid email address';
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: _age,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Age',
+                    suffixText: 'years',
+                  ),
+                  validator: (String? value) {
+                    final int? age = int.tryParse(value ?? '');
+                    return age != null && age >= 13 && age <= 120
+                        ? null
+                        : 'Use an age from 13 to 120';
+                  },
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: _gender,
+                  decoration: const InputDecoration(labelText: 'Sex'),
+                  items: const <DropdownMenuItem<String>>[
+                    DropdownMenuItem(value: 'Male', child: Text('Male')),
+                    DropdownMenuItem(value: 'Female', child: Text('Female')),
+                    DropdownMenuItem(value: 'Other', child: Text('Other')),
+                  ],
+                  onChanged: (String? value) {
+                    if (value != null) setState(() => _gender = value);
+                  },
+                ),
+                const SizedBox(height: 4),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Change password'),
+                  value: _showPasswordFields,
+                  onChanged: (bool value) {
+                    if (!value) {
+                      _currentPassword.clear();
+                      _newPassword.clear();
+                      _confirmPassword.clear();
+                    }
+                    setState(() => _showPasswordFields = value);
+                  },
+                ),
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeInOut,
+                  child: _showPasswordFields
+                      ? Column(
+                          children: <Widget>[
+                            _passwordField(
+                              controller: _currentPassword,
+                              label: 'Current password',
+                              validator: (String? value) =>
+                                  changingPassword &&
+                                      (value == null || value.isEmpty)
+                                  ? 'Enter your current password'
+                                  : null,
+                            ),
+                            const SizedBox(height: 12),
+                            _passwordField(
+                              controller: _newPassword,
+                              label: 'New password',
+                              validator: (String? value) =>
+                                  changingPassword &&
+                                      (value == null || value.length < 8)
+                                  ? 'Use at least 8 characters'
+                                  : null,
+                            ),
+                            const SizedBox(height: 12),
+                            _passwordField(
+                              controller: _confirmPassword,
+                              label: 'Confirm new password',
+                              validator: (String? value) =>
+                                  value != _newPassword.text
+                                  ? 'Passwords do not match'
+                                  : null,
+                            ),
+                          ],
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                const SizedBox(height: 12),
+                const Divider(),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: widget.onDeleteRequested,
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.red.shade700,
+                    ),
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Delete account'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _save, child: const Text('Save changes')),
+      ],
+    );
+  }
+}
+
 class _GoalValues {
   const _GoalValues({
     required this.weight,
@@ -1925,6 +2745,7 @@ class _GoalValues {
     required this.age,
     required this.target_weight,
     required this.target_days,
+    required this.activity_level,
   });
 
   final double weight;
@@ -1932,6 +2753,7 @@ class _GoalValues {
   final int age;
   final double target_weight;
   final int target_days;
+  final String activity_level;
 }
 
 class _GoalEditorDialog extends StatefulWidget {
@@ -1950,6 +2772,7 @@ class _GoalEditorDialogState extends State<_GoalEditorDialog> {
   late final TextEditingController age;
   late final TextEditingController target_weight;
   late final TextEditingController target_days;
+  late String activity_level;
 
   @override
   void initState() {
@@ -1971,6 +2794,7 @@ class _GoalEditorDialogState extends State<_GoalEditorDialog> {
           ? widget.user.target_days!.toString()
           : '',
     );
+    activity_level = widget.user.activity_level;
   }
 
   @override
@@ -1992,6 +2816,7 @@ class _GoalEditorDialogState extends State<_GoalEditorDialog> {
         age: int.parse(age.text),
         target_weight: double.parse(target_weight.text),
         target_days: int.parse(target_days.text),
+        activity_level: activity_level,
       ),
     );
   }
@@ -2062,6 +2887,36 @@ class _GoalEditorDialogState extends State<_GoalEditorDialog> {
                 min: 1,
                 max: 365,
                 integer: true,
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: activity_level,
+                decoration: const InputDecoration(
+                  labelText: 'Usual activity level',
+                  helperText:
+                      'Include your normal daily movement and workouts.',
+                ),
+                items: const <DropdownMenuItem<String>>[
+                  DropdownMenuItem(
+                    value: 'Sedentary',
+                    child: Text('Mostly sitting'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'Lightly active',
+                    child: Text('Light activity'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'Moderately active',
+                    child: Text('Moderate activity'),
+                  ),
+                  DropdownMenuItem(
+                    value: 'Very active',
+                    child: Text('Very active most days'),
+                  ),
+                ],
+                onChanged: (String? value) {
+                  if (value != null) setState(() => activity_level = value);
+                },
               ),
             ],
           ),

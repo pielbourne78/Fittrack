@@ -147,7 +147,7 @@ class FitTrackStore {
     );
 
     _users.add(new_user);
-    _session_user_id = new_user.id;
+    _session_user_id = null;
     try {
       await _persist();
     } catch (_) {
@@ -157,6 +157,111 @@ class FitTrackStore {
       rethrow;
     }
     return new_user;
+  }
+
+  Future<User> update_account_info({
+    required int user_id,
+    required String fullname,
+    required String email,
+    required int age,
+    required String gender,
+    String? current_password,
+    String? new_password,
+  }) async {
+    final User user = _find_user(user_id);
+    final String normalized_email = email.trim().toLowerCase();
+    final String normalized_fullname = fullname.trim();
+    if (normalized_fullname.isEmpty) {
+      throw ArgumentError.value(fullname, 'fullname', 'Enter your name.');
+    }
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(normalized_email)) {
+      throw ArgumentError.value(email, 'email', 'Enter a valid email address.');
+    }
+    if (_users.any(
+      (User candidate) =>
+          candidate.id != user_id && candidate.email == normalized_email,
+    )) {
+      throw StateError('An account with this email already exists.');
+    }
+    if (age < 13 || age > 120) {
+      throw ArgumentError.value(age, 'age', 'Use an age from 13 to 120.');
+    }
+    if (!const <String>{'Male', 'Female', 'Other'}.contains(gender)) {
+      throw ArgumentError.value(gender, 'gender');
+    }
+
+    final bool changing_password =
+        (current_password?.isNotEmpty ?? false) ||
+        (new_password?.isNotEmpty ?? false);
+    String? updated_password;
+    if (changing_password) {
+      if (current_password == null || current_password.isEmpty) {
+        throw ArgumentError.value(
+          current_password,
+          'current_password',
+          'Enter your current password to change it.',
+        );
+      }
+      if (new_password == null || new_password.length < 8) {
+        throw ArgumentError.value(
+          new_password,
+          'new_password',
+          'Use at least 8 characters for your new password.',
+        );
+      }
+      final List<String> password_parts = user.password.split(':');
+      if (password_parts.length != 2) {
+        throw StateError('This account password cannot be verified.');
+      }
+      final Uint8List salt = Uint8List.fromList(
+        base64Url.decode(base64Url.normalize(password_parts[0])),
+      );
+      final SecretKey current_key = await _passwordHasher.deriveKey(
+        secretKey: SecretKey(utf8.encode(current_password)),
+        nonce: salt,
+      );
+      final String current_hash = base64UrlEncode(
+        await current_key.extractBytes(),
+      );
+      if (current_hash != password_parts[1]) {
+        throw StateError('Your current password is incorrect.');
+      }
+
+      final Uint8List new_salt = Uint8List.fromList(
+        List<int>.generate(16, (_) => Random.secure().nextInt(256)),
+      );
+      final SecretKey new_key = await _passwordHasher.deriveKey(
+        secretKey: SecretKey(utf8.encode(new_password)),
+        nonce: new_salt,
+      );
+      updated_password =
+          '${base64UrlEncode(new_salt)}:'
+          '${base64UrlEncode(await new_key.extractBytes())}';
+    }
+
+    final String previous_fullname = user.fullname;
+    final String previous_email = user.email;
+    final int previous_age = user.age;
+    final String previous_gender = user.gender;
+    final String previous_password = user.password;
+    user
+      ..fullname = normalized_fullname
+      ..email = normalized_email
+      ..age = age
+      ..gender = gender;
+    if (updated_password != null) user.password = updated_password;
+    try {
+      await _persist();
+    } catch (_) {
+      user
+        ..fullname = previous_fullname
+        ..email = previous_email
+        ..age = previous_age
+        ..gender = previous_gender
+        ..password = previous_password;
+      rethrow;
+    }
+    return user;
   }
 
   Future<User> login({required String email, required String password}) async {
@@ -213,6 +318,7 @@ class FitTrackStore {
     required int age,
     required double target_weight,
     required int target_days,
+    String? activity_level,
   }) async {
     final User user = _find_user(user_id);
     if (!weight.isFinite || weight < 25 || weight > 350) {
@@ -230,11 +336,21 @@ class FitTrackStore {
     if (target_days < 1 || target_days > 365) {
       throw ArgumentError.value(target_days, 'target_days');
     }
+    if (activity_level != null &&
+        !const <String>{
+          'Sedentary',
+          'Lightly active',
+          'Moderately active',
+          'Very active',
+        }.contains(activity_level)) {
+      throw ArgumentError.value(activity_level, 'activity_level');
+    }
     final double? previous_weight = user.weight;
     final double? previous_height = user.height;
     final int previous_age = user.age;
     final double? previous_target_weight = user.target_weight;
     final int? previous_target_days = user.target_days;
+    final String previous_activity_level = user.activity_level;
     final double? previous_bmi = user.bmi;
     final String? previous_category = user.category;
     user.weight = weight;
@@ -242,6 +358,7 @@ class FitTrackStore {
     user.age = age;
     user.target_weight = target_weight;
     user.target_days = target_days;
+    if (activity_level != null) user.activity_level = activity_level;
 
     final double bmi_val = weight / ((height / 100) * (height / 100));
     user.bmi = double.parse(bmi_val.toStringAsFixed(2));
@@ -266,6 +383,7 @@ class FitTrackStore {
         ..age = previous_age
         ..target_weight = previous_target_weight
         ..target_days = previous_target_days
+        ..activity_level = previous_activity_level
         ..bmi = previous_bmi
         ..category = previous_category;
       rethrow;
@@ -307,6 +425,68 @@ class FitTrackStore {
     } catch (_) {
       _logs.remove(new_entry);
       _next_log_id = new_entry.id;
+      rethrow;
+    }
+  }
+
+  Future<void> update_log({
+    required int user_id,
+    required int log_id,
+    required int calories_in,
+    required String workout,
+  }) async {
+    _find_user(user_id);
+    final int log_index = _logs.indexWhere(
+      (DailyLog log) => log.id == log_id && log.user_id == user_id,
+    );
+    if (log_index < 0) {
+      throw StateError('The requested activity could not be found.');
+    }
+    if (calories_in < 0 || calories_in > 10000) {
+      throw ArgumentError.value(calories_in, 'calories_in');
+    }
+    const Map<String, int> burn_estimates = <String, int>{
+      'Push Day': 450,
+      'Pull Day': 400,
+      'Leg Day': 600,
+      'Rest': 0,
+    };
+    if (!burn_estimates.containsKey(workout)) {
+      throw ArgumentError.value(workout, 'workout');
+    }
+
+    final DailyLog previous_log = _logs[log_index];
+    final DailyLog updated_log = DailyLog(
+      id: previous_log.id,
+      calories_consumed: calories_in,
+      calories_burned: burn_estimates[workout]!,
+      workout_type: workout,
+      date_logged: previous_log.date_logged,
+      user_id: previous_log.user_id,
+    );
+    _logs[log_index] = updated_log;
+    try {
+      await _persist();
+    } catch (_) {
+      _logs[log_index] = previous_log;
+      rethrow;
+    }
+  }
+
+  Future<void> delete_log({required int user_id, required int log_id}) async {
+    _find_user(user_id);
+    final int log_index = _logs.indexWhere(
+      (DailyLog log) => log.id == log_id && log.user_id == user_id,
+    );
+    if (log_index < 0) {
+      throw StateError('The requested activity could not be found.');
+    }
+
+    final DailyLog deleted_log = _logs.removeAt(log_index);
+    try {
+      await _persist();
+    } catch (_) {
+      _logs.insert(log_index, deleted_log);
       rethrow;
     }
   }
